@@ -1,33 +1,57 @@
 package main
 
 import (
-	"encoding/json"
+	"database/sql"
 	"fmt"
 	"log"
+	"os"
 
+	_ "github.com/lib/pq"
+	"github.com/quanchobi/gator/internal/cli"
 	"github.com/quanchobi/gator/internal/config"
+	"github.com/quanchobi/gator/internal/database"
 )
 
 func main() {
-	cfg, err := config.Read()
+	cmds := cli.Commands{
+		Cmds: make(map[string]func(*cli.State, cli.Command) error),
+	}
+
+	functions := cli.GetFunctions()
+
+	for name, handler := range functions {
+		err := cmds.Register(name, handler)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	args := os.Args[1:] // first argument will just be go, so we can ignore it
+	if len(args) < 1 {
+		fmt.Println("at least one argument required")
+		os.Exit(1)
+	}
+
+	command := cli.Command{
+		Name: args[0],  // function called
+		Args: args[1:], // additional arguments
+	}
+
+	conf, err := config.Read()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	err = cfg.SetUser("anderson")
+	pdb, err := sql.Open("postgres", conf.DbURL)
+	dbQueries := database.New(pdb)
+
+	state := cli.State{
+		Cfg: &conf,
+		Db:  dbQueries,
+	}
+
+	err = cmds.Run(&state, command)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	cfg, err = config.Read()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	bytes, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println(string(bytes))
 }
