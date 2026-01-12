@@ -29,6 +29,8 @@ func GetFunctions() map[string]func(*State, Command) error {
 	return map[string]func(*State, Command) error{
 		"login":    HandlerLogin,
 		"register": HandlerRegister,
+		"reset":    HandlerReset,
+		"users":    HandlerUsers,
 	}
 }
 
@@ -62,6 +64,7 @@ func HandlerRegister(s *State, cmd Command) error {
 	}
 	username := cmd.Args[0]
 	if username == "" {
+		// should probably move all of these errors into main for proper error prop
 		fmt.Println("register expects one argument, the username.")
 		os.Exit(1)
 	}
@@ -87,10 +90,39 @@ func HandlerRegister(s *State, cmd Command) error {
 	return nil
 }
 
+func HandlerReset(s *State, cmd Command) error {
+	if len(cmd.Args) != 0 {
+		fmt.Println("reset takes no arguments")
+		os.Exit(1)
+	}
+	err := s.Db.Reset(context.Background())
+	if err != nil {
+		fmt.Printf("table was not reset\n")
+		return err
+	}
+	fmt.Printf("table was reset successfully\n")
+	return nil
+}
+
+func HandlerUsers(s *State, cmd Command) error {
+	users, err := s.Db.GetUsers(context.Background())
+	if err != nil {
+		return err
+	}
+	for _, user := range users {
+		if user.Name == s.Cfg.CurrentUserName {
+			fmt.Printf("* %v (current)\n", user.Name)
+		} else {
+			fmt.Printf("* %v\n", user.Name)
+		}
+	}
+	return nil
+}
+
 func (c *Commands) Run(s *State, cmd Command) error {
 	fn, ok := c.Cmds[cmd.Name]
 	if !ok {
-		fmt.Printf("command %s not found", cmd.Name)
+		fmt.Printf("command %s not found\n", cmd.Name)
 	}
 	err := fn(s, cmd)
 	if err != nil {
