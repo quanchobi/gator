@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/quanchobi/gator/internal/config"
 	"github.com/quanchobi/gator/internal/database"
+	"github.com/quanchobi/gator/internal/parser"
 )
 
 type State struct {
@@ -31,6 +32,7 @@ func GetFunctions() map[string]func(*State, Command) error {
 		"register": HandlerRegister,
 		"reset":    HandlerReset,
 		"users":    HandlerUsers,
+		"agg":      HandleAggregate,
 	}
 }
 
@@ -116,6 +118,17 @@ func HandlerUsers(s *State, cmd Command) error {
 			fmt.Printf("* %v\n", user.Name)
 		}
 	}
+	return nil
+}
+
+func HandleAggregate(s *State, cmd Command) error {
+	feed, err := parser.FetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%v\n", feed)
+
 	return nil
 }
 
