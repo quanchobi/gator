@@ -32,7 +32,9 @@ func GetFunctions() map[string]func(*State, Command) error {
 		"register": HandlerRegister,
 		"reset":    HandlerReset,
 		"users":    HandlerUsers,
-		"agg":      HandleAggregate,
+		"agg":      HandlerAggregate,
+		"addfeed":  HandlerAddFeed,
+		"feeds":    HandlerPrintFeeds,
 	}
 }
 
@@ -121,14 +123,59 @@ func HandlerUsers(s *State, cmd Command) error {
 	return nil
 }
 
-func HandleAggregate(s *State, cmd Command) error {
-	feed, err := parser.FetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+func HandlerAggregate(s *State, cmd Command) error {
+	feed, err := parser.FetchFeed(context.Background(), "https://www.wagslane.dev/index.xml") // placeholder url
 	if err != nil {
 		return err
 	}
 
 	fmt.Printf("%v\n", feed)
 
+	return nil
+}
+
+func HandlerAddFeed(s *State, cmd Command) error {
+	if len(cmd.Args) != 2 {
+		fmt.Println("addfeed takes two arguments: name of the feed and url")
+		os.Exit(1)
+	}
+	feedName := cmd.Args[0]
+	url := cmd.Args[1]
+	user, err := s.Db.GetUser(context.Background(), s.Cfg.CurrentUserName)
+	if err != nil {
+		return err
+	}
+	// create a new feed for the user
+	feed, err := s.Db.CreateFeed(context.Background(),
+		database.CreateFeedParams{
+			ID:        uuid.New(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Name:      feedName,
+			Url:       url,
+			UserID:    user.ID,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%v, %v, %v, %v, %v, %v", feed.ID, feed.CreatedAt, feed.UpdatedAt, feed.Name, feed.Url, feed.UserID)
+
+	return nil
+}
+
+func HandlerPrintFeeds(s *State, cmd Command) error {
+	if len(cmd.Args) != 0 {
+		fmt.Println("feeds takes no arguments")
+	}
+	feeds, err := s.Db.GetFeeds(context.Background())
+	if err != nil {
+		return err
+	}
+	for _, feed := range feeds {
+		fmt.Printf("%v, %v: %v\n", feed.Username, feed.Name, feed.Url)
+	}
 	return nil
 }
 
