@@ -28,13 +28,15 @@ type Commands struct {
 
 func GetFunctions() map[string]func(*State, Command) error {
 	return map[string]func(*State, Command) error{
-		"login":    HandlerLogin,
-		"register": HandlerRegister,
-		"reset":    HandlerReset,
-		"users":    HandlerUsers,
-		"agg":      HandlerAggregate,
-		"addfeed":  HandlerAddFeed,
-		"feeds":    HandlerPrintFeeds,
+		"login":     HandlerLogin,
+		"register":  HandlerRegister,
+		"reset":     HandlerReset,
+		"users":     HandlerUsers,
+		"agg":       HandlerAggregate,
+		"feeds":     HandlerPrintFeeds,
+		"addfeed":   MiddlewareLoggedIn(HandlerAddFeed),
+		"follow":    MiddlewareLoggedIn(HandlerFollow),
+		"following": MiddlewareLoggedIn(HandlerFollowing),
 	}
 }
 
@@ -134,18 +136,14 @@ func HandlerAggregate(s *State, cmd Command) error {
 	return nil
 }
 
-func HandlerAddFeed(s *State, cmd Command) error {
+func HandlerAddFeed(s *State, cmd Command, user database.User) error {
 	if len(cmd.Args) != 2 {
 		fmt.Println("addfeed takes two arguments: name of the feed and url")
 		os.Exit(1)
 	}
 	feedName := cmd.Args[0]
 	url := cmd.Args[1]
-	user, err := s.Db.GetUser(context.Background(), s.Cfg.CurrentUserName)
-	if err != nil {
-		return err
-	}
-	// create a new feed for the user
+
 	feed, err := s.Db.CreateFeed(context.Background(),
 		database.CreateFeedParams{
 			ID:        uuid.New(),
@@ -160,7 +158,19 @@ func HandlerAddFeed(s *State, cmd Command) error {
 		return err
 	}
 
-	fmt.Printf("%v, %v, %v, %v, %v, %v", feed.ID, feed.CreatedAt, feed.UpdatedAt, feed.Name, feed.Url, feed.UserID)
+	feedFollow, err := s.Db.CreateFeedFollow(context.Background(),
+		database.CreateFeedFollowParams{
+			ID:     uuid.New(),
+			UserID: user.ID,
+			FeedID: feed.ID,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Created feed record: %v, at: %v, %v (%v), for user %v\n", feed.ID, feed.CreatedAt, feed.Name, feed.Url, feed.UserID)
+	fmt.Printf("Created following record: %v, for user %v and feed %v\n", feedFollow.ID, feedFollow.UserID, feedFollow.FeedID)
 
 	return nil
 }
@@ -168,6 +178,7 @@ func HandlerAddFeed(s *State, cmd Command) error {
 func HandlerPrintFeeds(s *State, cmd Command) error {
 	if len(cmd.Args) != 0 {
 		fmt.Println("feeds takes no arguments")
+		os.Exit(1)
 	}
 	feeds, err := s.Db.GetFeeds(context.Background())
 	if err != nil {
@@ -177,6 +188,57 @@ func HandlerPrintFeeds(s *State, cmd Command) error {
 		fmt.Printf("%v, %v: %v\n", feed.Username, feed.Name, feed.Url)
 	}
 	return nil
+}
+
+func HandlerFollow(s *State, cmd Command, user database.User) error {
+	if len(cmd.Args) != 1 {
+		fmt.Println("follow takes one argument: the URL")
+		os.Exit(1)
+	}
+
+	feed, err := s.Db.GetFeedByURL(context.Background(), cmd.Args[0])
+	if err != nil {
+		return err
+	}
+
+	_, err = s.Db.CreateFeedFollow(context.Background(),
+		database.CreateFeedFollowParams{
+			ID:     uuid.New(),
+			UserID: user.ID,
+			FeedID: feed.ID,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("feed name: %v, user name: %v\n", feed.Name, user.Name)
+	return nil
+}
+
+func HandlerFollowing(s *State, cmd Command, user database.User) error {
+	follows, err := s.Db.GetFeedFollowsForUser(context.Background(), user.ID)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%s is following:\n", user.Name)
+	for _, follow := range follows {
+		fmt.Printf("%s (%s)\n", follow.Feedname, follow.Url)
+	}
+	return nil
+}
+
+func MiddlewareLoggedIn(handler func(s *State, cmd Command, user database.User) error) func(*State, Command) error {
+	return func(s *State, cmd Command) error {
+		user, err := s.Db.GetUser(context.Background(), s.Cfg.CurrentUserName)
+		if err != nil {
+			return err
+		}
+
+		handler(s, cmd, user)
+		return nil
+	}
 }
 
 func (c *Commands) Run(s *State, cmd Command) error {
