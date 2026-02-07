@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"time"
@@ -37,6 +38,7 @@ func GetFunctions() map[string]func(*State, Command) error {
 		"addfeed":   MiddlewareLoggedIn(HandlerAddFeed),
 		"follow":    MiddlewareLoggedIn(HandlerFollow),
 		"following": MiddlewareLoggedIn(HandlerFollowing),
+		"unfollow":  MiddlewareLoggedIn(HandlerUnfollow),
 	}
 }
 
@@ -126,12 +128,53 @@ func HandlerUsers(s *State, cmd Command) error {
 }
 
 func HandlerAggregate(s *State, cmd Command) error {
-	feed, err := parser.FetchFeed(context.Background(), "https://www.wagslane.dev/index.xml") // placeholder url
+	if len(cmd.Args) != 1 {
+		fmt.Printf("agg expects 1 argument, the interval at which to aggregate")
+	}
+
+	fmt.Println("Fetching every ", cmd.Args[0])
+	interval, err := time.ParseDuration(cmd.Args[0])
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("%v\n", feed)
+	ticker := time.NewTicker(interval)
+	for ; ; <-ticker.C {
+		err = scrapeFeeds(s)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func scrapeFeeds(s *State) error {
+	nextFeedSlice, err := s.Db.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		return err
+	}
+	nextFeed := nextFeedSlice[0]
+	feedURL := nextFeed.Url
+
+	fetchedFeed, err := parser.FetchFeed(context.Background(), feedURL)
+	if err != nil {
+		return err
+	}
+
+	s.Db.MarkFeedFetched(context.Background(),
+		database.MarkFeedFetchedParams{
+			ID: nextFeed.ID,
+			LastFetchedAt: sql.NullTime{
+				Time:  time.Now(),
+				Valid: true,
+			},
+			UpdatedAt: time.Now(),
+		},
+	)
+
+	fmt.Println(fetchedFeed.Channel.Title)
+	fmt.Println(fetchedFeed.Channel.Link)
+	fmt.Println(fetchedFeed.Channel.Description)
+	fmt.Println(fetchedFeed.Channel.Item)
 
 	return nil
 }
@@ -151,10 +194,15 @@ func HandlerAddFeed(s *State, cmd Command, user database.User) error {
 			UpdatedAt: time.Now(),
 			Name:      feedName,
 			Url:       url,
-			UserID:    user.ID,
+			LastFetchedAt: sql.NullTime{
+				Time:  time.Now(),
+				Valid: false,
+			},
+			UserID: user.ID,
 		},
 	)
 	if err != nil {
+		fmt.Printf("Error in creating feed %v \n", err)
 		return err
 	}
 
@@ -166,6 +214,7 @@ func HandlerAddFeed(s *State, cmd Command, user database.User) error {
 		},
 	)
 	if err != nil {
+		fmt.Println("Error in creating feed follows")
 		return err
 	}
 
@@ -226,6 +275,25 @@ func HandlerFollowing(s *State, cmd Command, user database.User) error {
 	for _, follow := range follows {
 		fmt.Printf("%s (%s)\n", follow.Feedname, follow.Url)
 	}
+	return nil
+}
+
+func HandlerUnfollow(s *State, cmd Command, user database.User) error {
+	if len(cmd.Args) != 1 {
+		fmt.Printf("unfollow expects 1 argument, the URL of the feed that is being unfollowed")
+	}
+
+	feed, err := s.Db.GetFeedByURL(context.Background(), cmd.Args[0])
+	if err != nil {
+		return err
+	}
+
+	s.Db.DeleteFeedFollow(context.Background(),
+		database.DeleteFeedFollowParams{
+			UserID: user.ID,
+			FeedID: feed.ID,
+		},
+	)
 	return nil
 }
 
