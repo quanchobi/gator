@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,18 +39,17 @@ func GetFunctions() map[string]func(*State, Command) error {
 		"follow":    MiddlewareLoggedIn(HandlerFollow),
 		"following": MiddlewareLoggedIn(HandlerFollowing),
 		"unfollow":  MiddlewareLoggedIn(HandlerUnfollow),
+		"browse":    MiddlewareLoggedIn(HandlerBrowse),
 	}
 }
 
 func HandlerLogin(s *State, cmd Command) error {
 	if len(cmd.Args) != 1 {
-		fmt.Println("login expects one argument, the username.")
-		os.Exit(1)
+		return fmt.Errorf("login expects one argument, the username.")
 	}
 	username := cmd.Args[0]
 	if username == "" {
-		fmt.Println("login expects one argument, the username.")
-		os.Exit(1)
+		return fmt.Errorf("login expects one argument, the username.")
 	}
 	// check if user is in database
 	user, err := s.Db.GetUser(context.Background(), username)
@@ -67,14 +66,11 @@ func HandlerLogin(s *State, cmd Command) error {
 
 func HandlerRegister(s *State, cmd Command) error {
 	if len(cmd.Args) != 1 {
-		fmt.Println("register expects one argument, the username")
-		os.Exit(1)
+		return fmt.Errorf("register expects one argument, the username")
 	}
 	username := cmd.Args[0]
 	if username == "" {
-		// should probably move all of these errors into main for proper error prop
-		fmt.Println("register expects one argument, the username.")
-		os.Exit(1)
+		return fmt.Errorf("register expects one argument, the username.")
 	}
 
 	user, err := s.Db.CreateUser(context.Background(),
@@ -100,8 +96,7 @@ func HandlerRegister(s *State, cmd Command) error {
 
 func HandlerReset(s *State, cmd Command) error {
 	if len(cmd.Args) != 0 {
-		fmt.Println("reset takes no arguments")
-		os.Exit(1)
+		return fmt.Errorf("reset takes no arguments")
 	}
 	err := s.Db.Reset(context.Background())
 	if err != nil {
@@ -129,7 +124,7 @@ func HandlerUsers(s *State, cmd Command) error {
 
 func HandlerAggregate(s *State, cmd Command) error {
 	if len(cmd.Args) != 1 {
-		fmt.Printf("agg expects 1 argument, the interval at which to aggregate")
+		return fmt.Errorf("agg expects 1 argument, the interval at which to aggregate")
 	}
 
 	fmt.Println("Fetching every ", cmd.Args[0])
@@ -148,11 +143,10 @@ func HandlerAggregate(s *State, cmd Command) error {
 }
 
 func scrapeFeeds(s *State) error {
-	nextFeedSlice, err := s.Db.GetNextFeedToFetch(context.Background())
+	nextFeed, err := s.Db.GetNextFeedToFetch(context.Background())
 	if err != nil {
 		return err
 	}
-	nextFeed := nextFeedSlice[0]
 	feedURL := nextFeed.Url
 
 	fetchedFeed, err := parser.FetchFeed(context.Background(), feedURL)
@@ -171,18 +165,35 @@ func scrapeFeeds(s *State) error {
 		},
 	)
 
-	fmt.Println(fetchedFeed.Channel.Title)
-	fmt.Println(fetchedFeed.Channel.Link)
-	fmt.Println(fetchedFeed.Channel.Description)
-	fmt.Println(fetchedFeed.Channel.Item)
+	for _, post := range fetchedFeed.Channel.Item {
+		postTime, err := time.Parse(time.RFC1123Z, post.PubDate)
+		if err != nil {
+			fmt.Println(post.PubDate)
+		}
+
+		_, err = s.Db.CreatePost(context.Background(),
+			database.CreatePostParams{
+				ID:          uuid.New(),
+				CreatedAt:   time.Now(),
+				UpdatedAt:   time.Now(),
+				Title:       post.Title,
+				Url:         post.Link,
+				Description: post.Description,
+				PublishedAt: postTime,
+				FeedID:      nextFeed.ID,
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
 func HandlerAddFeed(s *State, cmd Command, user database.User) error {
 	if len(cmd.Args) != 2 {
-		fmt.Println("addfeed takes two arguments: name of the feed and url")
-		os.Exit(1)
+		return fmt.Errorf("addfeed takes two arguments: name of the feed and url")
 	}
 	feedName := cmd.Args[0]
 	url := cmd.Args[1]
@@ -226,8 +237,7 @@ func HandlerAddFeed(s *State, cmd Command, user database.User) error {
 
 func HandlerPrintFeeds(s *State, cmd Command) error {
 	if len(cmd.Args) != 0 {
-		fmt.Println("feeds takes no arguments")
-		os.Exit(1)
+		return fmt.Errorf("feeds takes no arguments")
 	}
 	feeds, err := s.Db.GetFeeds(context.Background())
 	if err != nil {
@@ -241,8 +251,7 @@ func HandlerPrintFeeds(s *State, cmd Command) error {
 
 func HandlerFollow(s *State, cmd Command, user database.User) error {
 	if len(cmd.Args) != 1 {
-		fmt.Println("follow takes one argument: the URL")
-		os.Exit(1)
+		return fmt.Errorf("follow takes one argument: the URL")
 	}
 
 	feed, err := s.Db.GetFeedByURL(context.Background(), cmd.Args[0])
@@ -294,6 +303,39 @@ func HandlerUnfollow(s *State, cmd Command, user database.User) error {
 			FeedID: feed.ID,
 		},
 	)
+	return nil
+}
+
+func HandlerBrowse(s *State, cmd Command, user database.User) error {
+	var limit int
+	var err error
+	if len(cmd.Args) > 1 {
+		return fmt.Errorf("browse takes 0 or 1 arguments, if you pass 1 in, it is the number of posts showed. If not, it defaults to 2")
+	}
+	if len(cmd.Args) < 1 {
+		limit = 2
+	} else {
+		limit, err = strconv.Atoi(cmd.Args[0])
+		if err != nil {
+			return err
+		}
+	}
+	posts, err := s.Db.GetPostsForUser(context.Background(),
+		database.GetPostsForUserParams{
+			UserID: user.ID,
+			Limit:  int32(limit), // if you overflow here I salute you. I will not be putting in overflow guards. Normal use case would be to not display 2^32 or more posts at a time.
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, post := range posts {
+		fmt.Println(post.Title)
+		fmt.Println(post.PublishedAt)
+		fmt.Println(post.Description)
+	}
+
 	return nil
 }
 

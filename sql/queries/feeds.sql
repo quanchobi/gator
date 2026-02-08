@@ -25,8 +25,7 @@ JOIN users
 ON feeds.user_id = users.id;
 
 -- name: GetFeedByURL :one
-SELECT *
-FROM feeds
+SELECT * FROM feeds
 WHERE url = $1;
 
 -- name: MarkFeedFetched :exec
@@ -35,8 +34,7 @@ SET last_fetched_at = $2,
     updated_at = $3
 WHERE ID = $1;
 
--- name: GetNextFeedToFetch :many
-SELECT *
-FROM feeds
+-- name: GetNextFeedToFetch :one
+SELECT * FROM feeds
 ORDER BY last_fetched_at ASC NULLS FIRST
 LIMIT 1;

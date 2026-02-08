@@ -28,8 +28,7 @@ func main() {
 
 	args := os.Args[1:] // first argument will just be go, so we can ignore it
 	if len(args) < 1 {
-		fmt.Println("at least one argument required")
-		os.Exit(1)
+		log.Fatal(fmt.Errorf("at least one argument required"))
 	}
 
 	command := cli.Command{
